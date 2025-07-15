@@ -8,63 +8,49 @@ namespace UnityEssentials
     [ExecuteAlways]
     public class FieldBinder : MonoBehaviour
     {
-        public static List<FieldBinder> RegisteredBinders { get; private set; } = new();
+        public static List<FieldBinder> RegisteredBinders { get; } = new();
 
-        [Info(MessageType.Warning)]
-        public string Info = string.Empty;
+        [Info(MessageType.Warning)] public string Info = string.Empty;
 
         public enum BindingDirection { OneWayAB, OneWayBA, TwoWay }
         public BindingDirection Direction = BindingDirection.OneWayAB;
 
         [Space]
         public UnityEngine.Object SourceA;
-        [Enum(nameof(_dynamicReferencesA))]
-        public string ReferenceA;
+        [Enum(nameof(_referencesA))] public string ReferenceA;
 
         [Space]
         public UnityEngine.Object SourceB;
-        [Enum(nameof(_dynamicReferencesB))]
-        public string ReferenceB;
+        [Enum(nameof(_referencesB))] public string ReferenceB;
 
-        private string[] _dynamicReferencesA;
-        private string[] _dynamicReferencesB;
-
+        private string[] _referencesA, _referencesB;
         private bool _showAllReferences = false;
 
-        private static BindingFlags s_bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        private static readonly BindingFlags BindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
         public void Awake()
         {
             RegisteredBinders.Add(this);
-
-            OnSourceChanged();
+            OnBindingValueChange();
         }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
-        public static void InitializeBindings()
-        {
-            foreach (var binder in RegisteredBinders)
-                binder?.ApplyBinding();
-        }
+        public static void InitializeBindings() =>
+            RegisteredBinders.ForEach(b => b?.ApplyBinding());
 
-        [OnValueChanged(nameof(SourceA), nameof(SourceB))]
-        public void OnSourceChanged()
+        [OnValueChanged(nameof(Direction), nameof(SourceA), nameof(SourceB), nameof(ReferenceA), nameof(ReferenceB))]
+        public void OnBindingValueChange()
         {
-            FetchReferences(SourceA, out _dynamicReferencesA);
-            FetchReferences(SourceB, out _dynamicReferencesB);
-            CheckValueTypes();
+            _referencesA = CollectReferences(SourceA);
+            _referencesB = CollectReferences(SourceB);
+            ValidateTypes();
         }
-
-        [OnValueChanged(nameof(Direction), nameof(ReferenceA), nameof(ReferenceB))]
-        public void OnBindingChanged() =>
-            CheckValueTypes();
 
         [ContextMenu("Show All References")]
-        public void ShowAllReferences()
+        public void ToggleShowAll()
         {
             _showAllReferences = !_showAllReferences;
-
-            OnSourceChanged();
+            OnBindingValueChange();
         }
 
         public void ApplyBinding()
@@ -72,7 +58,7 @@ namespace UnityEssentials
             if (!SourceA || !SourceB)
                 return;
 
-            OnSourceChanged();
+            OnBindingValueChange();
 
             var valueA = GetValue(SourceA, ReferenceA);
             var valueB = GetValue(SourceB, ReferenceB);
@@ -98,11 +84,11 @@ namespace UnityEssentials
         {
             var type = source.GetType();
 
-            var field = type.GetField(path, s_bindingFlags);
+            var field = type.GetField(path, BindingFlags);
             if (field != null)
                 return field.GetValue(source);
 
-            var property = type.GetProperty(path, s_bindingFlags);
+            var property = type.GetProperty(path, BindingFlags);
             if (property != null && property.CanRead && property.GetIndexParameters().Length == 0)
                 return property.GetValue(source);
 
@@ -111,194 +97,152 @@ namespace UnityEssentials
 
         private void SetValue(UnityEngine.Object source, string path, object value)
         {
-            var sourceType = source.GetType();
+            var type = source.GetType();
 
-            var field = sourceType.GetField(path, s_bindingFlags);
+            var field = type.GetField(path, BindingFlags);
             if (field != null && field.FieldType.IsInstanceOfType(value))
             {
                 field.SetValue(source, value);
                 return;
             }
 
-            var property = sourceType.GetProperty(path, s_bindingFlags);
-            if (property != null && property.CanWrite && property.PropertyType.IsInstanceOfType(value) && property.GetIndexParameters().Length == 0)
-            {
+            var property = type.GetProperty(path, BindingFlags);
+            if (property != null && property.PropertyType.IsInstanceOfType(value) && property.CanWrite && property.GetIndexParameters().Length == 0)
                 property.SetValue(source, value);
-            }
         }
 
-        private void FetchReferences(object source, out string[] dynamicReferences)
+        private string[] CollectReferences(object source)
         {
-            dynamicReferences = Array.Empty<string>();
-
             if (source == null)
-                return;
+                return Array.Empty<string>();
 
-            var sourceType = source.GetType();
-            var typeChain = new List<Type>();
+            var type = source.GetType();
+            var chain = new List<Type>();
 
-            // Collect all types up to (but not including) MonoBehaviour, from base to derived
-            while (sourceType != null && sourceType != typeof(MonoBehaviour))
+            while (type != null && type != typeof(MonoBehaviour))
             {
-                typeChain.Insert(0, sourceType); // Insert at the beginning to reverse the order
-                sourceType = sourceType.BaseType;
+                chain.Insert(0, type);
+                type = type.BaseType;
             }
 
-            var fieldNames = new List<string>();
+            var references = new List<string>();
 
-            foreach (var typeInChain in typeChain)
+            foreach (var typeInChain in chain)
             {
-                var bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly;
-
+                var bindingflags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly;
                 if (_showAllReferences)
-                    bindingFlags |= BindingFlags.NonPublic;
+                    bindingflags |= BindingFlags.NonPublic;
 
-                foreach (var field in typeInChain.GetFields(bindingFlags))
+                foreach (var field in typeInChain.GetFields(bindingflags))
                 {
-                    if (!field.IsSpecialName && !field.Name.StartsWith("<"))
-                    {
-                        fieldNames.Add(field.Name);
+                    if (field.IsSpecialName || field.Name.StartsWith("<"))
+                        continue;
 
-                        // Recursively add fields from serializable classes
-                        AddSerializableSubFields(field.FieldType, field.Name, fieldNames, 1);
-                    }
+                    references.Add(field.Name);
+                    AddNested(field.FieldType, field.Name, references, 1);
                 }
 
-                if (_showAllReferences)
-                {
-                    foreach (var property in typeInChain.GetProperties(bindingFlags))
-                    {
-                        if (property.CanRead && property.GetIndexParameters().Length == 0)
-                        {
-                            fieldNames.Add(property.Name);
+                if (!_showAllReferences)
+                    continue;
 
-                            // Recursively add fields from serializable classes
-                            AddSerializableSubFields(property.PropertyType, property.Name, fieldNames, 1);
-                        }
-                    }
+                foreach (var property in typeInChain.GetProperties(bindingflags))
+                {
+                    if (!property.CanRead || property.GetIndexParameters().Length != 0)
+                        continue;
+
+                    references.Add(property.Name);
+                    AddNested(property.PropertyType, property.Name, references, 1);
                 }
             }
 
-            dynamicReferences = fieldNames.ToArray();
+            return references.ToArray();
         }
 
-        // Helper method to recursively add serializable subfields
-        private void AddSerializableSubFields(Type type, string prefix, List<string> fieldNames, int depth)
+        private void AddNested(Type type, string prefix, List<string> output, int depth)
         {
-            // Avoid recursion too deep
-            if (depth > 3 || type == null)
+            if (depth > 3 || type == null || type.IsPrimitive || type.IsEnum || type.IsArray || type.IsGenericType)
                 return;
 
-            // Skip primitives, enums, UnityEngine.Object, arrays, and generic types
-            if (type.IsPrimitive || type.IsEnum || typeof(UnityEngine.Object).IsAssignableFrom(type) || type.IsArray || type.IsGenericType)
+            if (typeof(UnityEngine.Object).IsAssignableFrom(type))
                 return;
 
-            // Only consider serializable classes/structs
-            if (!type.IsClass && !type.IsValueType)
-                return;
             if (!type.IsSerializable && type.GetCustomAttribute<SerializableAttribute>() == null)
                 return;
 
-            var bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly;
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly;
 
-            foreach (var field in type.GetFields(bindingFlags))
+            foreach (var field in type.GetFields(flags))
             {
-                if (!field.IsSpecialName && !field.Name.StartsWith("<"))
-                {
-                    string fullName = $"{prefix}.{field.Name}";
-                    fieldNames.Add(fullName);
+                if (field.IsSpecialName || field.Name.StartsWith("<"))
+                    continue;
 
-                    // Recursively add subfields
-                    AddSerializableSubFields(field.FieldType, fullName, fieldNames, depth + 1);
-                }
+                var name = $"{prefix}.{field.Name}";
+                output.Add(name);
+                AddNested(field.FieldType, name, output, depth + 1);
             }
 
-            if (_showAllReferences)
+            if (!_showAllReferences)
+                return;
+
+            foreach (var property in type.GetProperties(flags))
             {
-                foreach (var property in type.GetProperties(bindingFlags))
-                {
-                    // Exclude .Length property for string types
-                    if (type == typeof(string) && property.Name == "Length")
-                        continue;
+                if (type == typeof(string) && property.Name == "Length")
+                    continue;
 
-                    if (property.CanRead && property.GetIndexParameters().Length == 0)
-                    {
-                        string fullName = $"{prefix}.{property.Name}";
-                        fieldNames.Add(fullName);
+                if (!property.CanRead || property.GetIndexParameters().Length != 0)
+                    continue;
 
-                        AddSerializableSubFields(property.PropertyType, fullName, fieldNames, depth + 1);
-                    }
-                }
+                var name = $"{prefix}.{property.Name}";
+                output.Add(name);
+                AddNested(property.PropertyType, name, output, depth + 1);
             }
         }
 
-        private void CheckValueTypes()
+        private void ValidateTypes()
         {
             Info = string.Empty;
 
-            if (SourceA == null || SourceB == null || string.IsNullOrEmpty(ReferenceA) || string.IsNullOrEmpty(ReferenceB))
+            if (!SourceA || !SourceB || string.IsNullOrEmpty(ReferenceA) || string.IsNullOrEmpty(ReferenceB))
                 return;
 
-            Type valueTypeA = ResolveMemberType(SourceA.GetType(), ReferenceA);
-            Type valueTypeB = ResolveMemberType(SourceB.GetType(), ReferenceB);
+            var typeA = ResolvePathType(SourceA.GetType(), ReferenceA);
+            var typeB = ResolvePathType(SourceB.GetType(), ReferenceB);
 
-            if (valueTypeA == null || valueTypeB == null)
-            {
+            if (typeA == null || typeB == null)
                 Info = "Could not resolve types for selected references.";
-                return;
-            }
-
-            if (valueTypeA != valueTypeB)
-            {
-                switch (Direction)
+            else if (typeA != typeB)
+                Info = Direction switch
                 {
-                    case BindingDirection.OneWayAB:
-                        Info = $"Cannot bind {valueTypeA.Name} to {valueTypeB.Name}. Types must be exactly the same (A → B).";
-                        break;
-                    case BindingDirection.OneWayBA:
-                        Info = $"Cannot bind {valueTypeB.Name} to {valueTypeA.Name}. Types must be exactly the same (B → A).";
-                        break;
-                    case BindingDirection.TwoWay:
-                        Info = $"Cannot bind {valueTypeA.Name} and {valueTypeB.Name}. Types must be exactly the same (TwoWay).";
-                        break;
-                }
-                return;
-            }
+                    BindingDirection.OneWayAB => $"Cannot bind {typeA.Name} to {typeB.Name}. Types must be exactly the same (A → B).",
+                    BindingDirection.OneWayBA => $"Cannot bind {typeB.Name} to {typeA.Name}. Types must be exactly the same (B → A).",
+                    _ => $"Cannot bind {typeA.Name} and {typeB.Name}. Types must be exactly the same (TwoWay)."
+                };
         }
 
-        // Helper to resolve the type of a (possibly nested) field/property path
-        private Type ResolveMemberType(Type rootType, string path)
+        private Type ResolvePathType(Type type, string path)
         {
-            if (rootType == null || string.IsNullOrEmpty(path))
-                return null;
-
-            string[] parts = path.Split('.');
-            Type currentType = rootType;
-
-            foreach (var part in parts)
+            foreach (var part in path.Split('.'))
             {
-                var field = currentType.GetField(part, s_bindingFlags);
+                var field = type.GetField(part, BindingFlags);
                 if (field != null)
                 {
-                    currentType = field.FieldType;
+                    type = field.FieldType;
                     continue;
                 }
 
-                var property = currentType.GetProperty(part, s_bindingFlags);
+                var property = type.GetProperty(part, BindingFlags);
                 if (property != null && property.CanRead && property.GetIndexParameters().Length == 0)
                 {
-                    // Exclude .Length property for string types
-                    if (currentType == typeof(string) && property.Name == "Length")
+                    if (type == typeof(string) && property.Name == "Length")
                         return null;
-                    currentType = property.PropertyType;
+
+                    type = property.PropertyType;
                     continue;
                 }
 
-                // Not found
                 return null;
             }
-
-            return currentType;
+            return type;
         }
     }
 }
