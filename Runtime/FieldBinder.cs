@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 
@@ -13,7 +13,7 @@ namespace UnityEssentials
         public string Info = string.Empty;
 
         public enum BindingDirection { OneWayAB, OneWayBA, TwoWay }
-        public BindingDirection direction = BindingDirection.OneWayAB;
+        public BindingDirection Direction = BindingDirection.OneWayAB;
 
         [Space]
         public Object SourceA;
@@ -36,17 +36,8 @@ namespace UnityEssentials
         {
             RegisteredBinders.Add(this);
 
-            OnSourceAChanged();
-            OnSourceBChanged();
+            OnSourceChanged();
         }
-
-        [OnValueChanged(nameof(SourceA))]
-        public void OnSourceAChanged() =>
-            FetchReferences(SourceA, out _dynamicReferencesA);
-
-        [OnValueChanged(nameof(SourceB))]
-        public void OnSourceBChanged() =>
-            FetchReferences(SourceB, out _dynamicReferencesB);
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         public static void InitializeBindings()
@@ -55,13 +46,23 @@ namespace UnityEssentials
                 binder?.ApplyBinding();
         }
 
+        [OnValueChanged(nameof(SourceA), nameof(SourceB))]
+        public void OnSourceChanged()
+        {
+            FetchReferences(SourceA, out _dynamicReferencesA);
+            FetchReferences(SourceB, out _dynamicReferencesB);
+        }
+
+        [OnValueChanged(nameof(Direction), nameof(ReferenceA), nameof(ReferenceB))]
+        public void OnBindingChanged() =>
+            CheckValueTypes();
+
         [ContextMenu("Show All References")]
         public void ShowAllReferences()
         {
             _showAllReferences = !_showAllReferences;
 
-            OnSourceAChanged();
-            OnSourceBChanged();
+            OnSourceChanged();
         }
 
         public void ApplyBinding()
@@ -69,13 +70,12 @@ namespace UnityEssentials
             if (!SourceA || !SourceB)
                 return;
 
-            OnSourceAChanged();
-            OnSourceBChanged();
+            OnSourceChanged();
 
             var valueA = GetValue(SourceA, ReferenceA);
             var valueB = GetValue(SourceB, ReferenceB);
 
-            switch (direction)
+            switch (Direction)
             {
                 case BindingDirection.OneWayAB:
                     SetValue(SourceB, ReferenceB, valueA);
@@ -147,7 +147,7 @@ namespace UnityEssentials
 
             foreach (var typeInChain in typeChain)
             {
-                BindingFlags bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly;
+                var bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly;
 
                 if (_showAllReferences)
                     bindingFlags |= BindingFlags.NonPublic;
@@ -163,6 +163,56 @@ namespace UnityEssentials
             }
 
             dynamicReferences = fieldNames.ToArray();
+        }
+
+        private void CheckValueTypes()
+        {
+            Info = string.Empty;
+
+            if (SourceA == null || SourceB == null || string.IsNullOrEmpty(ReferenceA) || string.IsNullOrEmpty(ReferenceB))
+                return;
+
+            var typeA = SourceA.GetType();
+            var typeB = SourceB.GetType();
+
+            var memberA = typeA.GetField(ReferenceA, s_bindingFlags) as MemberInfo ?? typeA.GetProperty(ReferenceA, s_bindingFlags);
+            var memberB = typeB.GetField(ReferenceB, s_bindingFlags) as MemberInfo ?? typeB.GetProperty(ReferenceB, s_bindingFlags);
+
+            System.Type valueTypeA = null;
+            System.Type valueTypeB = null;
+
+            if (memberA is FieldInfo fieldA) 
+                valueTypeA = fieldA.FieldType;
+            else if (memberA is PropertyInfo propertyA) 
+                valueTypeA = propertyA.PropertyType;
+
+            if (memberB is FieldInfo fieldB) 
+                valueTypeB = fieldB.FieldType;
+            else if (memberB is PropertyInfo propertyB) 
+                valueTypeB = propertyB.PropertyType;
+
+            if (valueTypeA == null || valueTypeB == null)
+            {
+                Info = "Could not resolve types for selected references.";
+                return;
+            }
+
+            if (valueTypeA != valueTypeB)
+            {
+                switch (Direction)
+                {
+                    case BindingDirection.OneWayAB:
+                        Info = $"Cannot bind {valueTypeA.Name} to {valueTypeB.Name}. Types must be exactly the same (A → B).";
+                        break;
+                    case BindingDirection.OneWayBA:
+                        Info = $"Cannot bind {valueTypeB.Name} to {valueTypeA.Name}. Types must be exactly the same (B → A).";
+                        break;
+                    case BindingDirection.TwoWay:
+                        Info = $"Cannot bind {valueTypeA.Name} and {valueTypeB.Name}. Types must be exactly the same (TwoWay).";
+                        break;
+                }
+                return;
+            }
         }
     }
 }
