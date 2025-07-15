@@ -127,11 +127,10 @@ namespace UnityEssentials
 
         private void FetchReferences(object source, out string[] dynamicReferences)
         {
+            dynamicReferences = System.Array.Empty<string>();
+
             if (source == null)
-            {
-                dynamicReferences = System.Array.Empty<string>();
                 return;
-            }
 
             var sourceType = source.GetType();
             var typeChain = new List<System.Type>();
@@ -181,14 +180,14 @@ namespace UnityEssentials
             System.Type valueTypeA = null;
             System.Type valueTypeB = null;
 
-            if (memberA is FieldInfo fieldA) 
+            if (memberA is FieldInfo fieldA)
                 valueTypeA = fieldA.FieldType;
-            else if (memberA is PropertyInfo propertyA) 
+            else if (memberA is PropertyInfo propertyA)
                 valueTypeA = propertyA.PropertyType;
 
-            if (memberB is FieldInfo fieldB) 
+            if (memberB is FieldInfo fieldB)
                 valueTypeB = fieldB.FieldType;
-            else if (memberB is PropertyInfo propertyB) 
+            else if (memberB is PropertyInfo propertyB)
                 valueTypeB = propertyB.PropertyType;
 
             if (valueTypeA == null || valueTypeB == null)
