@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 
@@ -16,12 +17,12 @@ namespace UnityEssentials
         public BindingDirection Direction = BindingDirection.OneWayAB;
 
         [Space]
-        public Object SourceA;
+        public UnityEngine.Object SourceA;
         [Enum(nameof(_dynamicReferencesA))]
         public string ReferenceA;
 
         [Space]
-        public Object SourceB;
+        public UnityEngine.Object SourceB;
         [Enum(nameof(_dynamicReferencesB))]
         public string ReferenceB;
 
@@ -51,6 +52,7 @@ namespace UnityEssentials
         {
             FetchReferences(SourceA, out _dynamicReferencesA);
             FetchReferences(SourceB, out _dynamicReferencesB);
+            CheckValueTypes();
         }
 
         [OnValueChanged(nameof(Direction), nameof(ReferenceA), nameof(ReferenceB))]
@@ -92,7 +94,7 @@ namespace UnityEssentials
             }
         }
 
-        private object GetValue(Object source, string path)
+        private object GetValue(UnityEngine.Object source, string path)
         {
             var type = source.GetType();
 
@@ -107,7 +109,7 @@ namespace UnityEssentials
             return null;
         }
 
-        private void SetValue(Object source, string path, object value)
+        private void SetValue(UnityEngine.Object source, string path, object value)
         {
             var sourceType = source.GetType();
 
@@ -127,13 +129,13 @@ namespace UnityEssentials
 
         private void FetchReferences(object source, out string[] dynamicReferences)
         {
-            dynamicReferences = System.Array.Empty<string>();
+            dynamicReferences = Array.Empty<string>();
 
             if (source == null)
                 return;
 
             var sourceType = source.GetType();
-            var typeChain = new List<System.Type>();
+            var typeChain = new List<Type>();
 
             // Collect all types up to (but not including) MonoBehaviour, from base to derived
             while (sourceType != null && sourceType != typeof(MonoBehaviour))
@@ -152,16 +154,82 @@ namespace UnityEssentials
                     bindingFlags |= BindingFlags.NonPublic;
 
                 foreach (var field in typeInChain.GetFields(bindingFlags))
+                {
                     if (!field.IsSpecialName && !field.Name.StartsWith("<"))
+                    {
                         fieldNames.Add(field.Name);
 
+                        // Recursively add fields from serializable classes
+                        AddSerializableSubFields(field.FieldType, field.Name, fieldNames, 1);
+                    }
+                }
+
                 if (_showAllReferences)
+                {
                     foreach (var property in typeInChain.GetProperties(bindingFlags))
+                    {
                         if (property.CanRead && property.GetIndexParameters().Length == 0)
+                        {
                             fieldNames.Add(property.Name);
+
+                            // Recursively add fields from serializable classes
+                            AddSerializableSubFields(property.PropertyType, property.Name, fieldNames, 1);
+                        }
+                    }
+                }
             }
 
             dynamicReferences = fieldNames.ToArray();
+        }
+
+        // Helper method to recursively add serializable subfields
+        private void AddSerializableSubFields(Type type, string prefix, List<string> fieldNames, int depth)
+        {
+            // Avoid recursion too deep
+            if (depth > 3 || type == null)
+                return;
+
+            // Skip primitives, enums, UnityEngine.Object, arrays, and generic types
+            if (type.IsPrimitive || type.IsEnum || typeof(UnityEngine.Object).IsAssignableFrom(type) || type.IsArray || type.IsGenericType)
+                return;
+
+            // Only consider serializable classes/structs
+            if (!type.IsClass && !type.IsValueType)
+                return;
+            if (!type.IsSerializable && type.GetCustomAttribute<SerializableAttribute>() == null)
+                return;
+
+            var bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly;
+
+            foreach (var field in type.GetFields(bindingFlags))
+            {
+                if (!field.IsSpecialName && !field.Name.StartsWith("<"))
+                {
+                    string fullName = $"{prefix}.{field.Name}";
+                    fieldNames.Add(fullName);
+
+                    // Recursively add subfields
+                    AddSerializableSubFields(field.FieldType, fullName, fieldNames, depth + 1);
+                }
+            }
+
+            if (_showAllReferences)
+            {
+                foreach (var property in type.GetProperties(bindingFlags))
+                {
+                    // Exclude .Length property for string types
+                    if (type == typeof(string) && property.Name == "Length")
+                        continue;
+
+                    if (property.CanRead && property.GetIndexParameters().Length == 0)
+                    {
+                        string fullName = $"{prefix}.{property.Name}";
+                        fieldNames.Add(fullName);
+
+                        AddSerializableSubFields(property.PropertyType, fullName, fieldNames, depth + 1);
+                    }
+                }
+            }
         }
 
         private void CheckValueTypes()
@@ -171,24 +239,8 @@ namespace UnityEssentials
             if (SourceA == null || SourceB == null || string.IsNullOrEmpty(ReferenceA) || string.IsNullOrEmpty(ReferenceB))
                 return;
 
-            var typeA = SourceA.GetType();
-            var typeB = SourceB.GetType();
-
-            var memberA = typeA.GetField(ReferenceA, s_bindingFlags) as MemberInfo ?? typeA.GetProperty(ReferenceA, s_bindingFlags);
-            var memberB = typeB.GetField(ReferenceB, s_bindingFlags) as MemberInfo ?? typeB.GetProperty(ReferenceB, s_bindingFlags);
-
-            System.Type valueTypeA = null;
-            System.Type valueTypeB = null;
-
-            if (memberA is FieldInfo fieldA)
-                valueTypeA = fieldA.FieldType;
-            else if (memberA is PropertyInfo propertyA)
-                valueTypeA = propertyA.PropertyType;
-
-            if (memberB is FieldInfo fieldB)
-                valueTypeB = fieldB.FieldType;
-            else if (memberB is PropertyInfo propertyB)
-                valueTypeB = propertyB.PropertyType;
+            Type valueTypeA = ResolveMemberType(SourceA.GetType(), ReferenceA);
+            Type valueTypeB = ResolveMemberType(SourceB.GetType(), ReferenceB);
 
             if (valueTypeA == null || valueTypeB == null)
             {
@@ -212,6 +264,41 @@ namespace UnityEssentials
                 }
                 return;
             }
+        }
+
+        // Helper to resolve the type of a (possibly nested) field/property path
+        private Type ResolveMemberType(Type rootType, string path)
+        {
+            if (rootType == null || string.IsNullOrEmpty(path))
+                return null;
+
+            string[] parts = path.Split('.');
+            Type currentType = rootType;
+
+            foreach (var part in parts)
+            {
+                var field = currentType.GetField(part, s_bindingFlags);
+                if (field != null)
+                {
+                    currentType = field.FieldType;
+                    continue;
+                }
+
+                var property = currentType.GetProperty(part, s_bindingFlags);
+                if (property != null && property.CanRead && property.GetIndexParameters().Length == 0)
+                {
+                    // Exclude .Length property for string types
+                    if (currentType == typeof(string) && property.Name == "Length")
+                        return null;
+                    currentType = property.PropertyType;
+                    continue;
+                }
+
+                // Not found
+                return null;
+            }
+
+            return currentType;
         }
     }
 }
