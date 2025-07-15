@@ -4,86 +4,165 @@ using UnityEngine;
 
 namespace UnityEssentials
 {
+    [ExecuteAlways]
     public class FieldBinder : MonoBehaviour
     {
-        public enum BindingDirection { AtoB, BtoA, TwoWay }
+        public static List<FieldBinder> RegisteredBinders { get; private set; } = new();
 
-        public Object objectA;
-        public Object objectB;
-        public string pathA;
-        public string pathB;
-        [Enum(nameof(PathsA))]
-        public string selectedPath;
-        public string[] PathsA = new string[] { "Test", "Test2", "Test3" };
-        public BindingDirection direction = BindingDirection.AtoB;
+        [Info(MessageType.Warning)]
+        public string Info = string.Empty;
 
-        private static List<FieldBinder> _registeredBinders = new();
+        public enum BindingDirection { OneWayAB, OneWayBA, TwoWay }
+        public BindingDirection direction = BindingDirection.OneWayAB;
 
-        public void Awake() =>
-            _registeredBinders.Add(this);
+        [Space]
+        public Object SourceA;
+        [Enum(nameof(_dynamicReferencesA))]
+        public string ReferenceA;
+
+        [Space]
+        public Object SourceB;
+        [Enum(nameof(_dynamicReferencesB))]
+        public string ReferenceB;
+
+        private string[] _dynamicReferencesA;
+        private string[] _dynamicReferencesB;
+
+        private bool _showAllReferences = false;
+
+        private static BindingFlags s_bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+        public void Awake()
+        {
+            RegisteredBinders.Add(this);
+
+            OnSourceAChanged();
+            OnSourceBChanged();
+        }
+
+        [OnValueChanged(nameof(SourceA))]
+        public void OnSourceAChanged() =>
+            FetchReferences(SourceA, out _dynamicReferencesA);
+
+        [OnValueChanged(nameof(SourceB))]
+        public void OnSourceBChanged() =>
+            FetchReferences(SourceB, out _dynamicReferencesB);
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
-        static void InitBindings()
+        public static void InitializeBindings()
         {
-            foreach (var binder in _registeredBinders)
+            foreach (var binder in RegisteredBinders)
                 binder?.ApplyBinding();
+        }
+
+        [ContextMenu("Show All References")]
+        public void ShowAllReferences()
+        {
+            _showAllReferences = !_showAllReferences;
+
+            OnSourceAChanged();
+            OnSourceBChanged();
         }
 
         public void ApplyBinding()
         {
-            if (!objectA || !objectB) 
+            if (!SourceA || !SourceB)
                 return;
 
-            var valueA = GetValue(objectA, pathA);
-            var valueB = GetValue(objectB, pathB);
+            OnSourceAChanged();
+            OnSourceBChanged();
+
+            var valueA = GetValue(SourceA, ReferenceA);
+            var valueB = GetValue(SourceB, ReferenceB);
 
             switch (direction)
             {
-                case BindingDirection.AtoB:
-                    SetValue(objectB, pathB, valueA);
+                case BindingDirection.OneWayAB:
+                    SetValue(SourceB, ReferenceB, valueA);
                     break;
-                case BindingDirection.BtoA:
-                    SetValue(objectA, pathA, valueB);
+                case BindingDirection.OneWayBA:
+                    SetValue(SourceA, ReferenceA, valueB);
                     break;
                 case BindingDirection.TwoWay:
                     if (valueA != null && !valueA.Equals(valueB))
-                        SetValue(objectB, pathB, valueA);
+                        SetValue(SourceB, ReferenceB, valueA);
                     else if (valueB != null && !valueB.Equals(valueA))
-                        SetValue(objectA, pathA, valueB);
+                        SetValue(SourceA, ReferenceA, valueB);
                     break;
             }
         }
 
-        object GetValue(Object source, string path)
+        private object GetValue(Object source, string path)
         {
-            var bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-
             var type = source.GetType();
-            var member = type.GetField(path, bindingFlags) ?? (MemberInfo)type.GetProperty(path, bindingFlags);
 
-            if (member is FieldInfo field) 
+            var field = type.GetField(path, s_bindingFlags);
+            if (field != null)
                 return field.GetValue(source);
-            if (member is PropertyInfo prop) 
-                return prop.GetValue(source);
+
+            var property = type.GetProperty(path, s_bindingFlags);
+            if (property != null && property.CanRead && property.GetIndexParameters().Length == 0)
+                return property.GetValue(source);
 
             return null;
         }
 
-        void SetValue(Object source, string path, object value)
+        private void SetValue(Object source, string path, object value)
         {
-            var bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var sourceType = source.GetType();
 
-            var type = source.GetType();
-            var field = type.GetField(path, bindingFlags);
+            var field = sourceType.GetField(path, s_bindingFlags);
             if (field != null && field.FieldType.IsInstanceOfType(value))
             {
                 field.SetValue(source, value);
                 return;
             }
 
-            var property = type.GetProperty(path, bindingFlags);
-            if (property != null && property.CanWrite && property.PropertyType.IsInstanceOfType(value))
+            var property = sourceType.GetProperty(path, s_bindingFlags);
+            if (property != null && property.CanWrite && property.PropertyType.IsInstanceOfType(value) && property.GetIndexParameters().Length == 0)
+            {
                 property.SetValue(source, value);
+            }
+        }
+
+        private void FetchReferences(object source, out string[] dynamicReferences)
+        {
+            if (source == null)
+            {
+                dynamicReferences = System.Array.Empty<string>();
+                return;
+            }
+
+            var sourceType = source.GetType();
+            var typeChain = new List<System.Type>();
+
+            // Collect all types up to (but not including) MonoBehaviour, from base to derived
+            while (sourceType != null && sourceType != typeof(MonoBehaviour))
+            {
+                typeChain.Insert(0, sourceType); // Insert at the beginning to reverse the order
+                sourceType = sourceType.BaseType;
+            }
+
+            var fieldNames = new List<string>();
+
+            foreach (var typeInChain in typeChain)
+            {
+                BindingFlags bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly;
+
+                if (_showAllReferences)
+                    bindingFlags |= BindingFlags.NonPublic;
+
+                foreach (var field in typeInChain.GetFields(bindingFlags))
+                    if (!field.IsSpecialName && !field.Name.StartsWith("<"))
+                        fieldNames.Add(field.Name);
+
+                if (_showAllReferences)
+                    foreach (var property in typeInChain.GetProperties(bindingFlags))
+                        if (property.CanRead && property.GetIndexParameters().Length == 0)
+                            fieldNames.Add(property.Name);
+            }
+
+            dynamicReferences = fieldNames.ToArray();
         }
     }
 }
