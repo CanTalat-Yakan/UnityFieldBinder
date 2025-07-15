@@ -6,7 +6,10 @@
   "unity": "2022.1",
   "unityRelease": null,
   "dependencies": {
-    "com.unityessentials.core": "1.0.0"
+    "com.unityessentials.core": "1.0.0",
+    "com.unityessentials.enumdrawer": "1.0.0",
+    "com.unityessentials.onvaluechangedattribute": "1.0.0",
+    "com.unityessentials.infoattribute": "1.0.0"
   },
   "keywords": [],
   "author": {
