@@ -1,0 +1,17 @@
+{
+    "name": "UnityEssentials.FieldBinder",
+    "rootNamespace": "UnityEssentials",
+    "references": [
+        "GUID:0dd1051ff66652e4ea56f73784c825e0",
+        "GUID:7dd14409c16b48d40bac852aaab129eb"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
