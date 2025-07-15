@@ -10,7 +10,7 @@ namespace UnityEssentials
     {
         public static List<FieldBinder> RegisteredBinders { get; } = new();
 
-        [Info(MessageType.Warning)] public string Info = string.Empty;
+        [Info(MessageType.Warning)] private string _info = string.Empty;
 
         public enum BindingDirection { OneWayAB, OneWayBA, TwoWay }
         public BindingDirection Direction = BindingDirection.OneWayAB;
@@ -200,7 +200,7 @@ namespace UnityEssentials
 
         private void ValidateTypes()
         {
-            Info = string.Empty;
+            _info = string.Empty;
 
             if (!SourceA || !SourceB || string.IsNullOrEmpty(ReferenceA) || string.IsNullOrEmpty(ReferenceB))
                 return;
@@ -209,9 +209,9 @@ namespace UnityEssentials
             var typeB = ResolvePathType(SourceB.GetType(), ReferenceB);
 
             if (typeA == null || typeB == null)
-                Info = "Could not resolve types for selected references.";
+                _info = "Could not resolve types for selected references.";
             else if (typeA != typeB)
-                Info = Direction switch
+                _info = Direction switch
                 {
                     BindingDirection.OneWayAB => $"Cannot bind {typeA.Name} to {typeB.Name}. Types must be exactly the same (A → B).",
                     BindingDirection.OneWayBA => $"Cannot bind {typeB.Name} to {typeA.Name}. Types must be exactly the same (B → A).",
