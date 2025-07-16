@@ -36,7 +36,7 @@ namespace UnityEssentials
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         public static void InitializeBindings() =>
-            RegisteredBinders.ForEach(b => b?.ApplyBinding());
+            RegisteredBinders.ForEach(binding => binding?.ApplyBinding());
 
         [OnValueChanged(nameof(Direction), nameof(SourceA), nameof(SourceB), nameof(ReferenceA), nameof(ReferenceB))]
         public void OnBindingValueChange()
